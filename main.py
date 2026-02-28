@@ -1,16 +1,13 @@
 from playwright.sync_api import sync_playwright
-import os
-
-profile_dir = os.path.expanduser("~/cli-agent-profile")
 
 with sync_playwright() as p:
     context = p.chromium.launch_persistent_context(
-        user_data_dir=profile_dir,
+        user_data_dir="./user-data",
+        channel="chrome",
         headless=False,
-        args=["--remote-debugging-port=9220"],
     )
 
     page = context.new_page()
-    page.goto("https://example.com")
+    page.goto("https://www.google.com")
 
-    input("Press Enter to close...")
+    input("Log in manually, then press Enter...")
