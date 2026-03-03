@@ -16,3 +16,16 @@ then this cli tool (agent-browser)
 agent-browser connect 9222
 
 and shabang it works
+
+
+step -2 
+
+Install / update CLI (editable mode)
+
+uv tool install -e . --force
+
+Clean Reinstall (when things feel cursed)
+uv tool uninstall wolfie
+rm ~/.local/bin/wolfie  # only if uninstall fails
+uv tool install -e .
+
