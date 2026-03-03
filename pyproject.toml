@@ -1,5 +1,5 @@
 [project]
-name = "workwolf"
+name = "wolfie"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -16,6 +16,7 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 include = ["cli*", "daemon*"]
+namespaces = true
 
 [project.scripts]
 wolfie = "cli.wolfie:app"
