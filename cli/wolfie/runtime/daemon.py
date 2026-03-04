@@ -4,6 +4,7 @@ import time
 import httpx
 
 from ..core.config import DAEMON_HEALTH, console
+from .node import runtime_env
 
 
 def is_daemon_running() -> bool:
@@ -28,6 +29,7 @@ def start_daemon() -> None:
             "--port",
             "8765",
         ],
+        env=runtime_env(),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -46,4 +48,3 @@ def ensure_daemon() -> None:
         time.sleep(0.5)
 
     console.print("[red]Failed to start daemon.[/red]")
-
