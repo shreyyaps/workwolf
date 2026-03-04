@@ -1390,7 +1390,7 @@ wheels = [
 ]
 
 [[package]]
-name = "workwolf"
+name = "wolfie"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

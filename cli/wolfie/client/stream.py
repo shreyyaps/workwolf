@@ -5,7 +5,11 @@ from rich.live import Live
 from rich.spinner import Spinner
 from rich.text import Text
 
-from ..core.config import DAEMON_STREAM_URL, console
+from ..core.config import (
+    DAEMON_AGENT_BROWSER_COMMAND_URL,
+    DAEMON_STREAM_URL,
+    console,
+)
 
 
 async def stream_command(parts: list[str]) -> None:
@@ -27,7 +31,31 @@ async def stream_command(parts: list[str]) -> None:
     console.print()
 
 
+async def post_command(url: str, payload: dict) -> None:
+    async with httpx.AsyncClient(timeout=None) as client:
+        response = await client.post(url, json=payload)
+        if response.headers.get("content-type", "").startswith("application/json"):
+            console.print(response.text)
+        else:
+            console.print(response.text.strip())
+
+
 def handle_command(text: str) -> None:
     parts = text.split()
-    asyncio.run(stream_command(parts))
+    if not parts:
+        return
 
+    if parts[0] == "start":
+        asyncio.run(stream_command(parts))
+        return
+
+    if parts[0] == "open":
+        asyncio.run(
+            post_command(
+                DAEMON_AGENT_BROWSER_COMMAND_URL,
+                {"command": " ".join(parts)},
+            )
+        )
+        return
+
+    asyncio.run(stream_command(parts))
