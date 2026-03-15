@@ -1,21 +1,20 @@
+import shlex
 import subprocess
 from typing import Any
-
-EXPECTED_COMMAND = "open https://mail.google.com/mail"
 
 
 def run_agent_browser_vercel_command(user_command: str) -> dict[str, Any]:
     normalized = user_command.strip()
-    if normalized != EXPECTED_COMMAND:
+    if not normalized:
         return {
             "status": "ignored",
-            "reason": "unsupported_command",
-            "expected": EXPECTED_COMMAND,
+            "reason": "empty_command",
             "received": user_command,
         }
 
+    args = shlex.split(normalized)
     process = subprocess.Popen(
-        ["agent-browser", "open", "https://mail.google.com/mail"],
+        args,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -23,5 +22,5 @@ def run_agent_browser_vercel_command(user_command: str) -> dict[str, Any]:
     return {
         "status": "started",
         "pid": process.pid,
-        "executed": "agent-browser open https://mail.google.com/mail",
+        "executed": normalized,
     }
