@@ -4,6 +4,7 @@ from pathlib import Path
 from shutil import which
 import socket
 from typing import Any
+from urllib.parse import quote
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 USER_DATA_DIR = ROOT_DIR / "user-data"
@@ -41,6 +42,59 @@ async def _start_remote_debug_session() -> asyncio.subprocess.Process:
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
     )
+
+
+def _build_autoclose_data_url() -> str:
+    html = (
+        "<!doctype html><html><head><meta charset='utf-8'/>"
+        "<title>Wolfie Setup</title>"
+        "<script>"
+        "setTimeout(()=>{"
+        "try{window.open('','_self');window.close();}catch(e){}"
+        "},700);"
+        "</script></head>"
+        "<body>Initializing profile...</body></html>"
+    )
+    return "data:text/html;charset=utf-8," + quote(html)
+
+
+async def _start_setup_profile_session() -> asyncio.subprocess.Process:
+    data_url = _build_autoclose_data_url()
+    return await asyncio.create_subprocess_exec(
+        "google-chrome",
+        "--user-data-dir=./user-data",
+        data_url,
+        cwd=ROOT_DIR,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+
+
+async def _close_process(proc: asyncio.subprocess.Process, timeout: float = 6.0) -> None:
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=timeout)
+        return
+    except asyncio.TimeoutError:
+        proc.terminate()
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=4)
+            return
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+
+
+async def _ensure_user_data_initialized() -> None:
+    global _setup_process
+    if USER_DATA_DIR.exists():
+        return
+
+    _setup_process = await _start_setup_profile_session()
+    await _close_process(_setup_process)
+    _setup_process = None
+
+    if not USER_DATA_DIR.exists():
+        raise RuntimeError(f"user-data folder was not created at {USER_DATA_DIR}")
 
 
 async def _start_agent_connect_session() -> asyncio.subprocess.Process:
@@ -163,20 +217,7 @@ async def ensure_browser_session_started_with_setup_page(
                 "user_data_dir": str(USER_DATA_DIR),
             }
 
-        if not USER_DATA_DIR.exists():
-            _setup_process = await asyncio.create_subprocess_exec(
-                "google-chrome",
-                f"--user-data-dir={USER_DATA_DIR}",
-                setup_page_url,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            return {
-                "status": "setup_required",
-                "setup_page": setup_page_url,
-                "user_data_dir": str(USER_DATA_DIR),
-                "pid": _setup_process.pid,
-            }
+        await _ensure_user_data_initialized()
 
         _remote_debug_process = await _start_remote_debug_session()
         agent_process = await _ensure_agent_connected()
@@ -205,19 +246,10 @@ async def complete_setup_and_start_browser_session() -> dict[str, Any]:
             }
 
         if _is_running(_setup_process):
-            _setup_process.terminate()
-            try:
-                await asyncio.wait_for(_setup_process.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                _setup_process.kill()
-                await _setup_process.wait()
-            finally:
-                _setup_process = None
+            await _close_process(_setup_process)
+            _setup_process = None
 
-        if not USER_DATA_DIR.exists():
-            raise RuntimeError(
-                f"user-data folder was not created at {USER_DATA_DIR}"
-            )
+        await _ensure_user_data_initialized()
 
         _remote_debug_process = await _start_remote_debug_session()
         agent_process = await _ensure_agent_connected()
