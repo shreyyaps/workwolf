@@ -45,17 +45,9 @@ def handle_command(text: str) -> None:
     if not parts:
         return
 
-    if parts[0] == "start":
-        asyncio.run(stream_command(parts))
-        return
-
-    if parts[0] == "open":
-        asyncio.run(
-            post_command(
-                DAEMON_AGENT_BROWSER_COMMAND_URL,
-                {"command": " ".join(parts)},
-            )
+    asyncio.run(
+        post_command(
+            DAEMON_AGENT_BROWSER_COMMAND_URL,
+            {"command": " ".join(parts)},
         )
-        return
-
-    asyncio.run(stream_command(parts))
+    )
