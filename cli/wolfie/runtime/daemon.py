@@ -22,8 +22,9 @@ def start_daemon() -> None:
         [
             "uv",
             "run",
-            "uvicorn",
-            "daemon.main:app",
+            "fastapi",
+            "dev",
+            "daemon/main.py",
             "--host",
             "127.0.0.1",
             "--port",
