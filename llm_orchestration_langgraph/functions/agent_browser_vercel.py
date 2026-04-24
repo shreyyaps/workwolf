@@ -12,8 +12,19 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 USER_DATA_DIR = ROOT_DIR / "user-data"
 
 
+_CHROME_CANDIDATES = [
+    "google-chrome",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/usr/bin/google-chrome",
+]
+
+
 def _ensure_chrome_installed() -> str | None:
-    return which("google-chrome")
+    for candidate in _CHROME_CANDIDATES:
+        found = which(candidate) or (Path(candidate).is_file() and candidate) or None
+        if found:
+            return found
+    return None
 
 
 def _build_autoclose_data_url() -> str:
@@ -49,9 +60,12 @@ def _ensure_user_data_initialized() -> None:
         return
 
     data_url = _build_autoclose_data_url()
+    chrome_path = _ensure_chrome_installed()
+    if not chrome_path:
+        raise RuntimeError("google-chrome not found")
     proc = subprocess.Popen(
         [
-            "google-chrome",
+            chrome_path,
             "--user-data-dir=./user-data",
             data_url,
         ],

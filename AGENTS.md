@@ -5,23 +5,26 @@
 This repository is an early-stage local browser automation tool named `wolfie`.
 
 At a high level:
-- The `wolfie` CLI starts a local FastAPI daemon.
+- The `wolfie` CLI starts a local FastAPI daemon on `127.0.0.1:8765`.
 - The daemon manages a Chrome session launched with `--remote-debugging-port=9222`.
 - It then runs `agent-browser connect 9222` so an external agent can attach to that browser session.
 - Browser profile data is stored in `./user-data` at the repo root.
 
-The README is still a scratchpad. Treat the source code as the current source of truth.
+The top-level `README.md` is still a scratchpad. For a grounded overview,
+read `docs/semantic.md` and `docs/design-decisions.md`. Treat the source
+code as the ultimate source of truth.
 
 ## Main Entrypoints
 
-- CLI entrypoint: `wolfie` via `cli/wolfie/__init__.py`
-- Interactive CLI boot: `cli/wolfie/app/app.py`
+- CLI entrypoint: `wolfie` via `cli/wolfie/__init__.py` → `cli/wolfie/app/app.py`
+- Interactive REPL: `cli/wolfie/ui/shell.py`
+- CLI → daemon transport: `cli/wolfie/client/stream.py`
+- Runtime dependency bootstrap: `cli/wolfie/runtime/node.py`, `cli/wolfie/runtime/daemon.py`
 - Daemon app: `daemon/main.py`
-- Browser/session process manager: `daemon/browser/playwright_runner.py`
 - HTTP routes:
-  - `daemon/router/api.py`
-  - `daemon/router/agent_browser_command.py`
-- Legacy/direct command adapter:
+  - `daemon/router/api.py` — `GET /health`
+  - `daemon/router/agent_browser_command.py` — `POST /run-agent-browser-vercel-command`
+- Command dispatcher (launches Chrome, spawns `agent-browser`):
   - `llm_orchestration_langgraph/functions/agent_browser_vercel.py`
 
 ## Current Architecture
@@ -29,39 +32,62 @@ The README is still a scratchpad. Treat the source code as the current source of
 ### CLI layer
 
 `cli/wolfie/app/app.py` does three things when run without a subcommand:
-- ensures runtime dependencies exist
-- ensures the daemon is running on `127.0.0.1:8765`
-- opens the interactive prompt UI
+- ensures runtime dependencies exist (`ensure_runtime_dependencies`)
+- ensures the daemon is running on `127.0.0.1:8765` (`ensure_daemon`)
+- opens the interactive REPL (`interactive_shell`)
 
-The prompt UI lives in `cli/wolfie/ui/shell.py`.
+The REPL lives in `cli/wolfie/ui/shell.py`. Every typed line is POSTed to
+the daemon's `/run-agent-browser-vercel-command` endpoint via
+`cli/wolfie/client/stream.py`. The CLI is otherwise stateless — REPL history
+is persisted to `./.wolfie_history`.
 
 ### Runtime dependency bootstrap
 
 `cli/wolfie/runtime/node.py`:
 - prefers a system `node` if available
-- otherwise downloads a bundled Node runtime
-- installs `agent-browser` globally into a local prefix under the user home directory
+- otherwise downloads a bundled Node runtime (currently Linux-only; see
+  "Known Rough Edges")
+- installs `agent-browser` into a local npm prefix under `~/.toolname/npm-global`
+- exposes a `runtime_env()` helper that injects that prefix's `bin/` into
+  `PATH` for subprocesses
+
+`cli/wolfie/runtime/daemon.py`:
+- polls `GET /health`
+- if unhealthy, spawns `uv run fastapi dev daemon/main.py --host 127.0.0.1 --port 8765`
+- waits up to ~15 seconds for health
 
 ### Daemon layer
 
-`daemon/main.py` mounts:
-- `/health`
-- `/run-stream`
-- `/browser/setup-page`
-- `/browser/setup-complete`
-- `/browser/stop`
-- `/run-agent-browser-vercel-command`
+`daemon/main.py` mounts exactly two routes:
+- `GET  /health` — liveness, returns `{"status":"ok"}`
+- `POST /run-agent-browser-vercel-command` — accepts `{"command": "<string>"}`
+  and dispatches to `run_agent_browser_vercel_command`
 
-### Browser control
+Middleware in `daemon/middlewares/request_context.py` adds an
+`X-App-Name: workwolf-daemon` response header.
 
-`daemon/browser/playwright_runner.py` is the active browser session manager. It:
-- ensures `google-chrome` exists
-- ensures `agent-browser` exists
-- initializes `./user-data` if missing
-- launches Chrome on port `9222`
-- waits for the CDP port to come up
-- launches `agent-browser connect 9222`
-- captures recent `agent-browser` logs in memory
+### Browser / command dispatch
+
+`llm_orchestration_langgraph/functions/agent_browser_vercel.py` is the
+single module that actually drives Chrome. It:
+- resolves a Chrome executable across Linux and macOS candidate paths
+- on first run, creates `./user-data` by launching Chrome once with an
+  auto-closing `data:` URL
+- kills any existing Chrome holding the profile (matched by
+  `--user-data-dir=...` in the process command line)
+- launches Chrome with `--remote-debugging-port=9222 --no-first-run
+  --no-default-browser-check`
+- waits for CDP by `connect_ex` on `127.0.0.1:9222` (up to 12 s, retries once)
+- spawns `agent-browser connect 9222` as a detached subprocess
+- returns `{status, pid, agent_connect_pid, executed}` as JSON
+
+Supported verbs inside the REPL:
+- `start` — full bring-up described above
+- `open <url>` — launch Chrome on the profile pointed at a URL (no CDP)
+- `exit` / `quit` — CLI-only, ends the REPL; does not stop the daemon or Chrome
+
+An optional `agent-browser` prefix is accepted (e.g. `agent-browser start`).
+Unknown verbs return `{"status":"ignored","reason":"unsupported_command"}`.
 
 ## How To Run
 
@@ -70,59 +96,95 @@ Typical local flow:
 ```bash
 uv tool install -e . --force
 wolfie
+# then at the prompt:
+#   start
 ```
 
-Direct daemon run:
+Direct daemon run (bypasses the CLI):
 
 ```bash
-uv run uvicorn daemon.main:app --host 127.0.0.1 --port 8765
+uv run fastapi dev daemon/main.py --host 127.0.0.1 --port 8765
 ```
 
-Useful endpoints:
-- `GET /health`
-- `POST /browser/stop`
-- `POST /run-agent-browser-vercel-command`
+Quick HTTP sanity check:
+
+```bash
+curl http://127.0.0.1:8765/health
+curl -X POST http://127.0.0.1:8765/run-agent-browser-vercel-command \
+     -H 'Content-Type: application/json' \
+     -d '{"command":"start"}'
+```
 
 ## Important Implementation Notes
 
-- This repo currently has two overlapping command paths:
-  - the daemon-first path in `daemon/browser/playwright_runner.py`
-  - the direct subprocess path in `llm_orchestration_langgraph/functions/agent_browser_vercel.py`
-- The CLI currently posts all shell commands to `/run-agent-browser-vercel-command` from `cli/wolfie/client/stream.py`. The streaming `/run-stream` route exists, but the current CLI path does not use it.
-- `playwright` is listed as a dependency, but browser management is currently done through Chrome subprocesses and CDP connection setup, not through Playwright APIs.
-- The browser profile is persistent. Be careful with `./user-data`; do not delete it unless explicitly asked.
+- **Single command path.** There is now only one path for handling REPL
+  commands: `agent_browser_vercel.py`. An older `daemon/browser/playwright_runner.py`
+  was removed in the "clean up" commit (`7e1cf5b`). Do not reintroduce a
+  parallel path without a concrete reason.
+- **`playwright` is an unused dependency.** It is listed in `pyproject.toml`
+  from an earlier spike. Browser management is done with raw `subprocess`
+  + a TCP poll of the CDP port, not via Playwright APIs.
+- **The daemon runs under `fastapi dev`**, which auto-reloads on file
+  changes. Editing daemon code does *not* require a manual restart.
+- **The browser profile is persistent and precious.** `./user-data` holds
+  logged-in sessions. Never delete it. The termination routine kills
+  *processes* using the profile, not the directory.
+- **`llm_orchestration_langgraph/` is an aspirational folder name.** There
+  is no LangGraph, no LLM, no orchestration graph in that code today — just
+  subprocess plumbing. Rename is pending.
 
 ## Known Rough Edges
 
-- `cli/wolfie/runtime/node.py` hardcodes a Linux Node download URL (`linux-x64`). That will not work as-is on macOS without a system Node already installed.
-- `cli/wolfie/runtime/node.py` installs tools under `~/.toolname`, which looks like a placeholder path rather than a finalized project-specific location.
-- The README does not document the daemon routes or the split between the newer daemon flow and the legacy direct command flow.
-- There are no tests in the repository today.
+- `cli/wolfie/runtime/node.py` hardcodes a Linux Node download URL
+  (`linux-x64`). On macOS without a system Node, the fallback will fetch a
+  Linux binary that cannot execute. System Node is preferred, so this only
+  bites on a genuinely clean machine.
+- `cli/wolfie/runtime/node.py` installs tools under `~/.toolname`, which
+  is a placeholder path. Should be `~/.wolfie`.
+- `playwright` is still in `pyproject.toml` despite being unused.
+- There are no tests and no CI.
+- The top-level `README.md` is a personal scratchpad, not documentation.
 
 ## Working Conventions For Agents
 
-- Prefer reading the code over relying on the README.
-- Preserve the current local-first workflow: CLI -> daemon -> Chrome remote debugging -> `agent-browser connect`.
-- If changing browser startup behavior, check both active code paths so they do not drift further apart unless the task is explicitly to remove one.
-- Avoid destructive operations against `./user-data` unless the user explicitly asks.
-- Keep changes small and practical; this codebase is still in a prototyping phase.
+- Prefer reading the code over relying on the top-level README. Prefer
+  `docs/semantic.md` and `docs/design-decisions.md` over this file when
+  they conflict — they are intended to stay closer to the code.
+- Preserve the current local-first workflow: CLI → daemon → Chrome remote
+  debugging → `agent-browser connect`.
+- Keep the daemon bound to `127.0.0.1`. There is no auth; binding to
+  anything else is a remote-code-execution hazard.
+- Avoid destructive operations against `./user-data` unless the user
+  explicitly asks. Killing Chrome processes that hold the profile is fine
+  and expected; removing the profile directory is not.
+- Keep changes small and practical; this codebase is still prototyping.
+  Do not add frameworks, abstractions, or parallel code paths on spec.
+- When changing Chrome discovery or startup, update
+  `_ensure_chrome_installed` and `_ensure_user_data_initialized` together
+  — they both need to resolve the same executable.
 
 ## Suggested Validation
 
-Because this project depends on local binaries and networking, validation should usually be incremental:
+Because this project depends on local binaries and networking, validation
+is incremental and mostly manual.
+
+Static check (no runtime required):
 
 ```bash
 PYTHONPYCACHEPREFIX=.pycache python3 -m compileall cli daemon llm_orchestration_langgraph
 ```
 
-If dependencies are available locally:
+Daemon smoke test:
 
 ```bash
-uv run uvicorn daemon.main:app --host 127.0.0.1 --port 8765
+uv run fastapi dev daemon/main.py --host 127.0.0.1 --port 8765
+# in another shell:
+curl http://127.0.0.1:8765/health   # expect {"status":"ok"}
 ```
 
-Then verify:
-- `GET /health` returns `{"status":"ok"}`
-- `wolfie` starts the prompt
-- `start` launches Chrome on port `9222`
-
+End-to-end:
+- `wolfie` starts the prompt without errors
+- `start` launches Chrome on port `9222` and returns
+  `{"status":"started", ...}` instead of `chrome_not_found` or `cdp_not_ready`
+- A subsequent `open https://example.com` opens a window using the same
+  persisted profile
