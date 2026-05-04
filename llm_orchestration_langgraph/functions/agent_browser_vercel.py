@@ -1,12 +1,11 @@
+import json
 import shlex
 import subprocess
 from pathlib import Path
 from shutil import which
 import socket
-import signal
 import time
 from typing import Any
-from urllib.parse import quote
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 USER_DATA_DIR = ROOT_DIR / "user-data"
@@ -19,26 +18,46 @@ _CHROME_CANDIDATES = [
 ]
 
 
+def _check_node_installed() -> tuple[bool, str | None]:
+    """Check if Node.js is installed."""
+    node_path = which("node")
+    return (node_path is not None, node_path)
+
+
+def _check_npm_installed() -> tuple[bool, str | None]:
+    """Check if npm is installed."""
+    npm_path = which("npm")
+    return (npm_path is not None, npm_path)
+
+
+def _check_agent_browser_installed() -> bool:
+    """Check if agent-browser is installed globally."""
+    result = subprocess.run(
+        ["npm", "list", "-g", "agent-browser"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def _install_agent_browser() -> bool:
+    """Install agent-browser globally via npm."""
+    result = subprocess.run(
+        ["npm", "install", "-g", "agent-browser"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
 def _ensure_chrome_installed() -> str | None:
     for candidate in _CHROME_CANDIDATES:
         found = which(candidate) or (Path(candidate).is_file() and candidate) or None
         if found:
             return found
     return None
-
-
-def _build_autoclose_data_url() -> str:
-    html = (
-        "<!doctype html><html><head><meta charset='utf-8'/>"
-        "<title>Wolfie Setup</title>"
-        "<script>"
-        "setTimeout(()=>{"
-        "try{window.open('','_self');window.close();}catch(e){}"
-        "},700);"
-        "</script></head>"
-        "<body>Initializing profile...</body></html>"
-    )
-    return "data:text/html;charset=utf-8," + quote(html)
 
 
 def _close_process(proc: subprocess.Popen, timeout: float = 6.0) -> None:
@@ -59,20 +78,22 @@ def _ensure_user_data_initialized() -> None:
     if USER_DATA_DIR.exists():
         return
 
-    data_url = _build_autoclose_data_url()
     chrome_path = _ensure_chrome_installed()
     if not chrome_path:
         raise RuntimeError("google-chrome not found")
+
+    # Open Chrome to initialize the user-data directory
     proc = subprocess.Popen(
         [
             chrome_path,
-            "--user-data-dir=./user-data",
-            data_url,
+            f"--user-data-dir={USER_DATA_DIR}",
         ],
-        cwd=ROOT_DIR,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+
+    # Wait a bit for profile to initialize
+    time.sleep(2)
     _close_process(proc)
 
     if not USER_DATA_DIR.exists():
@@ -124,6 +145,92 @@ def _terminate_existing_chrome_with_profile() -> None:
         subprocess.run(["kill", "-KILL", str(pid)], check=False)
 
 
+def _ensure_agent_browser_ready() -> dict[str, Any]:
+    """Ensure agent-browser is installed and ready. Returns status dict."""
+    node_installed, _ = _check_node_installed()
+    npm_installed, _ = _check_npm_installed()
+
+    if not node_installed or not npm_installed:
+        return {
+            "status": "error",
+            "reason": "node_npm_not_installed",
+            "logs": [
+                {
+                    "level": "error",
+                    "message": f"Node.js: {'✓ installed' if node_installed else '✗ NOT installed'}",
+                },
+                {
+                    "level": "error",
+                    "message": f"npm: {'✓ installed' if npm_installed else '✗ NOT installed'}",
+                },
+            ],
+        }
+
+    if _check_agent_browser_installed():
+        return {
+            "status": "ready",
+            "logs": [{"level": "success", "message": "✓ agent-browser is installed"}],
+        }
+
+    # Try to install agent-browser
+    logs = [
+        {"level": "info", "message": "📦 Installing agent-browser globally..."}
+    ]
+
+    if _install_agent_browser():
+        logs.append(
+            {"level": "success", "message": "✓ agent-browser installed successfully"}
+        )
+        return {"status": "ready", "logs": logs}
+    else:
+        logs.append(
+            {"level": "error", "message": "✗ Failed to install agent-browser"}
+        )
+        return {
+            "status": "error",
+            "reason": "installation_failed",
+            "logs": logs,
+        }
+
+
+def _run_agent_browser_command(cmd: str) -> dict[str, Any]:
+    """Run a command through agent-browser."""
+    try:
+        result = subprocess.run(
+            f"agent-browser {cmd}",
+            shell=True,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+
+        if result.returncode == 0:
+            try:
+                output = json.loads(result.stdout)
+                return {"status": "success", "data": output}
+            except json.JSONDecodeError:
+                return {"status": "success", "data": result.stdout.strip()}
+        else:
+            return {
+                "status": "error",
+                "reason": "command_failed",
+                "error": result.stderr.strip(),
+            }
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "error",
+            "reason": "timeout",
+            "error": "Command timed out after 30 seconds",
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "reason": "execution_error",
+            "error": str(e),
+        }
+
+
 def run_agent_browser_vercel_command(user_command: str) -> dict[str, Any]:
     normalized = user_command.strip()
     if not normalized:
@@ -133,7 +240,15 @@ def run_agent_browser_vercel_command(user_command: str) -> dict[str, Any]:
             "received": user_command,
         }
 
-    args = shlex.split(normalized)
+    try:
+        args = shlex.split(normalized)
+    except ValueError:
+        return {
+            "status": "error",
+            "reason": "parse_error",
+            "message": "Invalid command syntax",
+        }
+
     if not args:
         return {
             "status": "ignored",
@@ -142,37 +257,69 @@ def run_agent_browser_vercel_command(user_command: str) -> dict[str, Any]:
         }
 
     cmd = args[0]
-    if cmd == "agent-browser" and len(args) > 1:
-        cmd = args[1]
-        args = args[1:]
+    remaining_args = args[1:] if len(args) > 1 else []
+
+    # Handle agent commands (Vercel browser agent)
+    if cmd == "agent":
+        if not remaining_args:
+            return {
+                "status": "error",
+                "reason": "missing_agent_command",
+                "message": "Usage: agent <command> [args]",
+            }
+
+        # Build the agent-browser command
+        agent_cmd = " ".join(remaining_args)
+
+        # Ensure agent-browser is ready
+        ready_status = _ensure_agent_browser_ready()
+        if ready_status["status"] != "ready":
+            return ready_status
+
+        # Execute the agent-browser command
+        result = _run_agent_browser_command(agent_cmd)
+        return result
 
     chrome_path = _ensure_chrome_installed()
     if chrome_path is None:
         return {
             "status": "error",
             "reason": "chrome_not_found",
-            "received": user_command,
+            "message": "Google Chrome not found on system",
         }
 
-    if cmd == "open":
-        if len(args) < 2:
-            return {
-                "status": "ignored",
-                "reason": "missing_url",
-                "received": user_command,
-            }
-        url = args[1]
+    if cmd == "init":
+        # First-time setup: open browser for user to login
+        _ensure_user_data_initialized()
+        _terminate_existing_chrome_with_profile()
+
         chrome_args = [
             chrome_path,
             f"--user-data-dir={USER_DATA_DIR}",
-            url,
+            "--no-first-run",
+            "--no-default-browser-check",
         ]
-    else:
-        chrome_args = []
+        chrome_process = subprocess.Popen(
+            chrome_args,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        return {
+            "status": "awaiting_login",
+            "message": "🔐 Browser opened for login. Complete your login and then type: start",
+            "pid": chrome_process.pid,
+        }
 
     if cmd == "start":
+        # Ensure agent-browser is installed before starting
+        ready_status = _ensure_agent_browser_ready()
+        if ready_status["status"] != "ready":
+            return ready_status
+
         _ensure_user_data_initialized()
         _terminate_existing_chrome_with_profile()
+
         chrome_args = [
             chrome_path,
             "--remote-debugging-port=9222",
@@ -193,41 +340,48 @@ def run_agent_browser_vercel_command(user_command: str) -> dict[str, Any]:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+
         if not _wait_for_cdp_ready():
             return {
                 "status": "error",
                 "reason": "cdp_not_ready",
-                "received": user_command,
+                "message": "Failed to initialize browser debugging protocol",
             }
-
-        agent_process = subprocess.Popen(
-            ["agent-browser", "connect", "9222"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
 
         return {
             "status": "started",
+            "message": "✓ Browser connected and ready!\n💡 Try: agent screenshot",
             "pid": chrome_process.pid,
-            "agent_connect_pid": agent_process.pid,
-            "executed": " ".join(chrome_args),
+            "debug_port": 9222,
         }
 
-    if not chrome_args:
+    if cmd == "open":
+        if not remaining_args:
+            return {
+                "status": "error",
+                "reason": "missing_url",
+                "message": "Usage: open <url>",
+            }
+        url = remaining_args[0]
+        chrome_args = [
+            chrome_path,
+            f"--user-data-dir={USER_DATA_DIR}",
+            url,
+        ]
+        process = subprocess.Popen(
+            chrome_args,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         return {
-            "status": "ignored",
-            "reason": "unsupported_command",
-            "received": user_command,
+            "status": "started",
+            "message": f"🌐 Opening {url}",
+            "pid": process.pid,
         }
-
-    process = subprocess.Popen(
-        chrome_args,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
 
     return {
-        "status": "started",
-        "pid": process.pid,
-        "executed": " ".join(chrome_args),
+        "status": "error",
+        "reason": "unsupported_command",
+        "message": f"Unknown command: {cmd}",
+        "hint": "Use 'help' to see available commands",
     }
