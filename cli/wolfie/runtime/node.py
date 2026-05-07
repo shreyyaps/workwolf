@@ -6,6 +6,8 @@ import urllib.request
 from pathlib import Path
 
 from ..ui.runtime_messages import (
+    show_agent_browser_checking,
+    show_agent_browser_detected,
     show_agent_browser_installed,
     show_agent_browser_installing,
     show_node_detected,
@@ -23,7 +25,6 @@ ARCHIVE_PATH = INSTALL_DIR / "node.tar.xz"
 EXTRACTED_DIR = INSTALL_DIR / f"node-{NODE_VERSION}-linux-x64"
 NODE_DIR = INSTALL_DIR / "node"
 NODE_BIN = NODE_DIR / "bin" / "node"
-NPM_BIN = NODE_DIR / "bin" / "npm"
 NPM_GLOBAL_PREFIX = INSTALL_DIR / "npm-global"
 
 
@@ -110,7 +111,14 @@ def runtime_env() -> dict[str, str]:
 
 def ensure_agent_browser() -> None:
     env = runtime_env()
-    if shutil.which("agent-browser", path=env.get("PATH")):
+    show_agent_browser_checking()
+
+    agent_browser_binary = shutil.which("agent-browser", path=env.get("PATH"))
+    if agent_browser_binary:
+        show_agent_browser_detected(
+            agent_browser_binary,
+            _run_version(agent_browser_binary),
+        )
         return
 
     npm_binary = shutil.which("npm", path=env.get("PATH"))

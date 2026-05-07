@@ -1,3 +1,4 @@
+import asyncio
 import sys
 from pathlib import Path
 
@@ -25,7 +26,7 @@ async def run_agent_browser_command(payload: dict):
     if not isinstance(command, str) or not command.strip():
         raise HTTPException(status_code=400, detail="A command string is required")
 
-    result = run_agent_browser_vercel_command(command)
+    result = await asyncio.to_thread(run_agent_browser_vercel_command, command)
     if result.get("status") == "ignored":
         raise HTTPException(status_code=400, detail=result)
 

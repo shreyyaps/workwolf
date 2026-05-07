@@ -58,7 +58,7 @@ def ensure_daemon() -> None:
 
     start_daemon()
 
-    for i in range(60):
+    for _ in range(60):
         if is_daemon_running():
             console.print("[green]✓ Daemon ready[/green]")
             return

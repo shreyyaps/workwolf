@@ -17,14 +17,17 @@ def show_node_installed() -> None:
     console.print("[green]Node installed successfully.[/green]")
 
 
-def show_node_reinstall(current: str, target: str) -> None:
-    console.print(
-        f"[yellow]Node version mismatch ({current}). Reinstalling {target}...[/yellow]"
-    )
-
-
 def show_agent_browser_installing() -> None:
     console.print("[yellow]agent-browser is installing...[/yellow]")
+
+
+def show_agent_browser_checking() -> None:
+    console.print("[dim]Checking agent-browser...[/dim]")
+
+
+def show_agent_browser_detected(path: str, version: str | None = None) -> None:
+    suffix = f" ({version})" if version else f" at {path}"
+    console.print(f"[green]agent-browser already installed{suffix}.[/green]")
 
 
 def show_agent_browser_installed() -> None:

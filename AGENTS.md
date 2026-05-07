@@ -18,7 +18,8 @@ code as the ultimate source of truth.
 
 - CLI entrypoint: `wolfie` via `cli/wolfie/__init__.py` → `cli/wolfie/app/app.py`
 - Interactive REPL: `cli/wolfie/ui/shell.py`
-- CLI → daemon transport: `cli/wolfie/client/stream.py`
+- CLI → daemon transport and response rendering: `cli/wolfie/client/daemon.py`
+- Shared CLI styling: `cli/wolfie/ui/theme.py`
 - Runtime dependency bootstrap: `cli/wolfie/runtime/node.py`, `cli/wolfie/runtime/daemon.py`
 - Daemon app: `daemon/main.py`
 - HTTP routes:
@@ -36,10 +37,18 @@ code as the ultimate source of truth.
 - ensures the daemon is running on `127.0.0.1:8765` (`ensure_daemon`)
 - opens the interactive REPL (`interactive_shell`)
 
-The REPL lives in `cli/wolfie/ui/shell.py`. Every typed line is POSTed to
-the daemon's `/run-agent-browser-vercel-command` endpoint via
-`cli/wolfie/client/stream.py`. The CLI is otherwise stateless — REPL history
-is persisted to `./.wolfie_history`.
+The REPL lives in `cli/wolfie/ui/shell.py`. Local shell commands
+(`help`, `clear`, `exit`, `quit`) are handled in-process. Every other typed
+line is POSTed to the daemon's `/run-agent-browser-vercel-command` endpoint
+via `cli/wolfie/client/daemon.py`. The CLI is otherwise stateless — REPL
+history is persisted to `./.wolfie_history`.
+
+The public help/completer intentionally exposes only `start`, `init`,
+`open <url>`, `help`, `clear`, `exit`, and `quit`. Do not add `agent ...`
+commands back to the public help unless the product surface changes.
+`agent-browser ...` may still be accepted as an undocumented manual-testing
+passthrough while prototyping, but it should remain hidden from normal CLI
+help and completion.
 
 ### Runtime dependency bootstrap
 
@@ -47,7 +56,8 @@ is persisted to `./.wolfie_history`.
 - prefers a system `node` if available
 - otherwise downloads a bundled Node runtime (currently Linux-only; see
   "Known Rough Edges")
-- installs `agent-browser` into a local npm prefix under `~/.toolname/npm-global`
+- checks for `agent-browser`, logs the detected binary/version when present,
+  and installs it with npm into `~/.toolname/npm-global` when missing
 - exposes a `runtime_env()` helper that injects that prefix's `bin/` into
   `PATH` for subprocesses
 
@@ -83,11 +93,15 @@ single module that actually drives Chrome. It:
 
 Supported verbs inside the REPL:
 - `start` — full bring-up described above
+- `init` — open the persistent profile for login / re-login setup
 - `open <url>` — launch Chrome on the profile pointed at a URL (no CDP)
+- `help` — CLI-only, shows the public command list
+- `clear` — CLI-only, clears the terminal and redraws the shell header
 - `exit` / `quit` — CLI-only, ends the REPL; does not stop the daemon or Chrome
 
-An optional `agent-browser` prefix is accepted (e.g. `agent-browser start`).
-Unknown verbs return `{"status":"ignored","reason":"unsupported_command"}`.
+The CLI forwards non-local commands to the daemon even if they are not listed
+in help. Keep testing-only passthroughs undocumented unless they become part
+of the real user workflow.
 
 ## How To Run
 
