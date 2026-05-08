@@ -20,6 +20,7 @@ PUBLIC_COMMAND_TREE = {
     "start": None,
     "init": None,
     "open": None,
+    "prompt": None,
     "help": None,
     "clear": None,
     "exit": None,
@@ -56,7 +57,7 @@ def _print_header() -> None:
     quick.add_row(
         f"[bold {ACCENT}]start[/]\n[{DIM}]Launch Chrome; prompts for Google sign-in on first use[/]",
         f"[bold {ACCENT}]init[/]\n[{DIM}]Force a re-login (clears the sign-in sentinel)[/]",
-        f"[bold {ACCENT}]open <url>[/]\n[{DIM}]Open a page in the saved profile[/]",
+        f"[bold {ACCENT}]prompt <task>[/]\n[{DIM}]Run the LangGraph browser agent[/]",
     )
     console.print(quick)
     console.rule(style="bright_black on grey11")
@@ -95,6 +96,7 @@ def _print_help() -> None:
     table.add_row("Browser", "start", "Launch Chrome with CDP; prompts for Google sign-in on first use")
     table.add_row("Browser", "init", "Force a re-login (clears the sign-in sentinel)")
     table.add_row("Browser", "open <url>", "Open a URL with the saved profile")
+    table.add_row("Agent", "prompt <task>", "Run the LangGraph planner/executor browser agent")
     table.add_row("Shell", "clear", "Clear the terminal")
     table.add_row("Shell", "help", "Show this command list")
     table.add_row("Shell", "exit / quit", "Exit the CLI; daemon and Chrome keep running")

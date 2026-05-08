@@ -369,9 +369,17 @@ def _ensure_agent_browser_ready() -> dict[str, Any]:
 def _run_agent_browser_command(cmd: str) -> dict[str, Any]:
     """Run a command through agent-browser."""
     try:
+        args = shlex.split(cmd)
+    except ValueError as e:
+        return {
+            "status": "error",
+            "reason": "parse_error",
+            "error": str(e),
+        }
+
+    try:
         result = subprocess.run(
-            f"agent-browser {cmd}",
-            shell=True,
+            ["agent-browser", *args],
             env=_runtime_env(),
             capture_output=True,
             text=True,
@@ -403,6 +411,15 @@ def _run_agent_browser_command(cmd: str) -> dict[str, Any]:
             "reason": "execution_error",
             "error": str(e),
         }
+
+
+def run_agent_browser_cli_command(cmd: str) -> dict[str, Any]:
+    """Run an agent-browser CLI command after checking the local install."""
+    ready_status = _ensure_agent_browser_ready()
+    if ready_status["status"] != "ready":
+        return ready_status
+    result = _run_agent_browser_command(cmd)
+    return _attach_logs(result, ready_status.get("logs", []))
 
 
 def _attach_logs(result: dict[str, Any], logs: list[dict[str, Any]]) -> dict[str, Any]:
@@ -465,12 +482,8 @@ def run_agent_browser_vercel_command(user_command: str) -> dict[str, Any]:
     # the user's exact quoting by stripping the prefix from the raw string
     # rather than re-joining shlex-split args.
     if cmd == "agent-browser":
-        ready_status = _ensure_agent_browser_ready()
-        if ready_status["status"] != "ready":
-            return ready_status
         rest = normalized[len("agent-browser"):].strip()
-        result = _run_agent_browser_command(rest)
-        return _attach_logs(result, ready_status.get("logs", []))
+        return run_agent_browser_cli_command(rest)
 
     if cmd == "needs_login":
         return {"status": "ready", "needs_login": not _login_completed()}

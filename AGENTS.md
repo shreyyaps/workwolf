@@ -25,6 +25,12 @@ code as the ultimate source of truth.
 - HTTP routes:
   - `daemon/router/api.py` — `GET /health`
   - `daemon/router/agent_browser_command.py` — `POST /run-agent-browser-vercel-command`
+  - `daemon/router/agent.py` — `POST /agent/prompt`
+- Daemon LangGraph agent layer:
+  - `daemon/agent/graph.py` — planner/executor loop
+  - `daemon/agent/prompts.py` — system prompt and role prompts
+  - `daemon/agent/tools.py` — `agent_browser(command)` tool wrapper
+  - `daemon/agent/service.py` — streams graph events as NDJSON
 - Command dispatcher (launches Chrome, spawns `agent-browser`):
   - `llm_orchestration_langgraph/functions/agent_browser_vercel.py`
 
@@ -44,11 +50,11 @@ via `cli/wolfie/client/daemon.py`. The CLI is otherwise stateless — REPL
 history is persisted to `./.wolfie_history`.
 
 The public help/completer intentionally exposes only `start`, `init`,
-`open <url>`, `help`, `clear`, `exit`, and `quit`. Do not add `agent ...`
-commands back to the public help unless the product surface changes.
-`agent-browser ...` may still be accepted as an undocumented manual-testing
-passthrough while prototyping, but it should remain hidden from normal CLI
-help and completion.
+`open <url>`, `prompt <task>`, `help`, `clear`, `exit`, and `quit`. Do not add
+`agent ...` commands back to the public help unless the product surface
+changes. `agent-browser ...` may still be accepted as an undocumented
+manual-testing passthrough while prototyping, but it should remain hidden from
+normal CLI help and completion.
 
 ### Runtime dependency bootstrap
 
@@ -68,13 +74,43 @@ help and completion.
 
 ### Daemon layer
 
-`daemon/main.py` mounts exactly two routes:
+`daemon/main.py` mounts these routes:
 - `GET  /health` — liveness, returns `{"status":"ok"}`
 - `POST /run-agent-browser-vercel-command` — accepts `{"command": "<string>"}`
   and dispatches to `run_agent_browser_vercel_command`
+- `POST /agent/prompt` — accepts `{"prompt": "<task>", "thread_id": "...",
+  "max_steps": 20}` and streams NDJSON agent events back to the CLI
 
 Middleware in `daemon/middlewares/request_context.py` adds an
 `X-App-Name: workwolf-daemon` response header.
+
+### LangGraph agent layer
+
+The LangGraph agent is daemon-owned. The CLI only submits a prompt and renders
+streamed events; it must not contain planner, executor, model, or browser-tool
+logic.
+
+The graph is a planner/executor correction loop:
+- planner/controller owns the user goal, plan, next task, stopping condition,
+  and course correction when observations do not match expectations
+- executor receives exactly one narrow task, chooses one `agent-browser`
+  command, runs it, and returns an observation
+- the loop continues until the planner marks the task done, asks the user,
+  fails, or hits `max_steps`
+
+The only browser tool exposed to the executor is
+`agent_browser(command: str)`, implemented in `daemon/agent/tools.py`. It uses
+the existing `agent-browser` CLI wrapper in
+`llm_orchestration_langgraph/functions/agent_browser_vercel.py`, so it runs
+against the same headed Chrome profile connected on CDP port `9222`.
+Before invoking the graph, `daemon/agent/service.py` preflights
+`agent-browser connect 9222`; if CDP is not ready, the stream tells the user
+to run `start` first.
+
+Gemini is accessed through `google-genai`; the default model is
+`gemini-3-pro-preview` and can be overridden with `WOLFIE_GEMINI_MODEL`.
+The default thinking level is `HIGH` and can be overridden with
+`WOLFIE_GEMINI_THINKING_LEVEL`.
 
 ### Browser / command dispatch
 
@@ -95,6 +131,7 @@ Supported verbs inside the REPL:
 - `start` — full bring-up described above
 - `init` — open the persistent profile for login / re-login setup
 - `open <url>` — launch Chrome on the profile pointed at a URL (no CDP)
+- `prompt <task>` — send a task to the daemon LangGraph browser agent
 - `help` — CLI-only, shows the public command list
 - `clear` — CLI-only, clears the terminal and redraws the shell header
 - `exit` / `quit` — CLI-only, ends the REPL; does not stop the daemon or Chrome
