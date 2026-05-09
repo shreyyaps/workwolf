@@ -91,10 +91,12 @@ streamed events; it must not contain planner, executor, model, or browser-tool
 logic.
 
 The graph is a planner/executor correction loop:
-- planner/controller owns the user goal, plan, next task, stopping condition,
-  and course correction when observations do not match expectations
-- executor receives exactly one narrow task, chooses one `agent-browser`
-  command, runs it, and returns an observation
+- planner/controller owns the user goal, plan, stopping condition, and
+  high-level course correction when observations do not match expectations
+- planner tasks should be outcome-based, not low-level command sequences
+- executor receives exactly one outcome-based task and may loop through multiple
+  `agent-browser` commands to complete that task before returning control to
+  the planner
 - the loop continues until the planner marks the task done, asks the user,
   fails, or hits `max_steps`
 
@@ -103,6 +105,14 @@ The only browser tool exposed to the executor is
 the existing `agent-browser` CLI wrapper in
 `llm_orchestration_langgraph/functions/agent_browser_vercel.py`, so it runs
 against the same headed Chrome profile connected on CDP port `9222`.
+Passing an empty string to `agent_browser("")` intentionally runs bare
+`agent-browser` and returns the CLI command help, so the executor can look up
+available commands without a second tool.
+Snapshot prompts should prefer compact/scoped snapshots (`snapshot -i -c`,
+`snapshot -i -c -d 5`, `snapshot -i -c -s "<selector>"`) and annotated
+screenshots when text snapshots are too noisy. Observation excerpts preserve
+both head and tail text so bottom-right dialogs, like Gmail compose, are less
+likely to be hidden by truncation.
 Before invoking the graph, `daemon/agent/service.py` preflights
 `agent-browser connect 9222`; if CDP is not ready, the stream tells the user
 to run `start` first.

@@ -21,6 +21,8 @@ class AgentState(TypedDict, total=False):
     planner_status: str
     planner_reason: str
     next_task: str
+    executor_status: str
+    executor_reason: str
     executor_thought: str
     browser_command: str
     success_criteria: str

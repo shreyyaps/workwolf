@@ -314,6 +314,15 @@ def _format_agent_event(data: Mapping[str, object]) -> None:
             output = f"{output}\ncriteria: {criteria}"
         _print_status("observation", Text(output, style=f"{style} {BG}"), style)
         return
+    if event_type == "executor":
+        status = str(data.get("status") or "done")
+        style = "green" if status == "done" else "yellow"
+        message = str(data.get("reason") or status)
+        thought = data.get("thought")
+        if thought:
+            message = f"{message}\n{thought}"
+        _print_status("executor", Text(message, style=f"{style} {BG}"), style)
+        return
     if event_type == "final":
         _print_status("final", Text(str(data.get("text") or ""), style=f"bold green {BG}"), "green")
         return

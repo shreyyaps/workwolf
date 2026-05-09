@@ -42,10 +42,35 @@ async def _planner_node(state: AgentState) -> AgentState:
 
 
 async def _executor_node(state: AgentState) -> AgentState:
+    if state.get("step_count", 0) >= state.get("max_steps", 20):
+        return {
+            "executor_status": "blocked",
+            "executor_reason": "Maximum browser command steps reached.",
+            "executor_thought": "The task needs planner review because the step limit was reached.",
+            "browser_command": "",
+            "success_criteria": "",
+        }
+
     client = GeminiClient()
     selected = await client.generate_json(executor_prompt(state))
+    status = str(selected.get("status", "continue")).strip().lower()
+    if status not in {"continue", "done", "blocked"}:
+        status = "continue"
+
+    has_command = "command" in selected
     command = str(selected.get("command", "")).strip()
     success_criteria = str(selected.get("success_criteria", "")).strip()
+    thought = str(selected.get("thought", "")).strip()
+    result_summary = str(selected.get("result_summary", "")).strip()
+
+    if status != "continue" or not has_command:
+        return {
+            "executor_status": status if has_command else "blocked",
+            "executor_reason": result_summary or "Executor is handing control back to the planner.",
+            "executor_thought": thought,
+            "browser_command": "",
+            "success_criteria": success_criteria,
+        }
 
     result = await asyncio.to_thread(agent_browser, command)
     ok = result.get("status") == "success"
@@ -60,7 +85,9 @@ async def _executor_node(state: AgentState) -> AgentState:
     }
 
     return {
-        "executor_thought": str(selected.get("thought", "")),
+        "executor_status": "continue",
+        "executor_reason": result_summary,
+        "executor_thought": thought,
         "browser_command": command,
         "success_criteria": success_criteria,
         "observations": [*state.get("observations", []), observation],
@@ -72,6 +99,15 @@ def _route_after_planner(state: AgentState) -> str:
     if state.get("planner_status") == "continue" and state.get("next_task"):
         return "execute"
     return "finish"
+
+
+def _route_after_executor(state: AgentState) -> str:
+    if (
+        state.get("executor_status") == "continue"
+        and state.get("step_count", 0) < state.get("max_steps", 20)
+    ):
+        return "execute"
+    return "plan"
 
 
 def build_graph() -> Any:
@@ -90,6 +126,10 @@ def build_graph() -> Any:
         _route_after_planner,
         {"execute": "executor", "finish": END},
     )
-    graph.add_edge("executor", "planner")
+    graph.add_conditional_edges(
+        "executor",
+        _route_after_executor,
+        {"execute": "executor", "plan": "planner"},
+    )
     _COMPILED_GRAPH = graph.compile(checkpointer=MemorySaver())
     return _COMPILED_GRAPH

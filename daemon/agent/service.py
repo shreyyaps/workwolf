@@ -13,11 +13,14 @@ from .state import initial_state
 from .tools import agent_browser
 
 
-def _clean_text(value: Any, limit: int = 4000) -> str:
+def _clean_text(value: Any, limit: int = 8000) -> str:
     if value is None:
         return ""
     text = str(value)
-    return text if len(text) <= limit else text[:limit] + "...[truncated]"
+    if len(text) <= limit:
+        return text
+    half = limit // 2
+    return text[:half] + "\n...[middle truncated]...\n" + text[-half:]
 
 
 def _events_from_update(update: dict[str, Any]) -> list[dict[str, Any]]:
@@ -41,11 +44,25 @@ def _events_from_update(update: dict[str, Any]) -> list[dict[str, Any]]:
 
     executor = update.get("executor")
     if executor:
+        status = executor.get("executor_status") or "continue"
+        reason = executor.get("executor_reason") or ""
+        command = executor.get("browser_command", "")
+        if status != "continue":
+            emitted.append(
+                event(
+                    "executor",
+                    status=status,
+                    reason=reason,
+                    thought=executor.get("executor_thought", ""),
+                )
+            )
+            return emitted
+
         emitted.append(
             event(
                 "action",
                 tool="agent-browser",
-                command=executor.get("browser_command", ""),
+                command=command,
                 thought=executor.get("executor_thought", ""),
             )
         )
@@ -68,7 +85,7 @@ def _events_from_update(update: dict[str, Any]) -> list[dict[str, Any]]:
 async def run_agent_prompt(
     prompt: str,
     thread_id: str | None = None,
-    max_steps: int = 20,
+    max_steps: int = 40,
     api_key: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     if not prompt.strip():

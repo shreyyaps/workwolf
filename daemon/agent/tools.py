@@ -8,12 +8,8 @@ from llm_orchestration_langgraph.functions.agent_browser_vercel import (
 def agent_browser(command: str) -> dict[str, Any]:
     """Run one agent-browser CLI command against Wolfie's connected browser."""
     normalized = command.strip()
+    if normalized == "agent-browser":
+        normalized = ""
     if normalized.startswith("agent-browser "):
         normalized = normalized[len("agent-browser ") :].strip()
-    if not normalized:
-        return {
-            "status": "error",
-            "reason": "empty_agent_browser_command",
-            "error": "agent_browser tool requires a command",
-        }
     return run_agent_browser_cli_command(normalized)

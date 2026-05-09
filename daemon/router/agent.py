@@ -33,7 +33,7 @@ async def run_agent_prompt_route(
     if thread_id is not None and not isinstance(thread_id, str):
         raise HTTPException(status_code=400, detail="thread_id must be a string")
 
-    max_steps = payload.get("max_steps", 20)
+    max_steps = payload.get("max_steps", 40)
     if not isinstance(max_steps, int):
         raise HTTPException(status_code=400, detail="max_steps must be an integer")
 
