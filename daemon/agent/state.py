@@ -8,14 +8,18 @@ class ConversationMessage(TypedDict, total=False):
 
 class BrowserObservation(TypedDict, total=False):
     command: str
+    skipped: bool
+    side_effect: bool
     ok: bool
     output: Any
     error: str
     success_criteria: str
     validation_command: str
+    validation_commands: list[str]
     validation_ok: bool
     validation_output: Any
     validation_error: str
+    validation_results: list[dict[str, Any]]
 
 
 class AgentState(TypedDict, total=False):
@@ -40,6 +44,7 @@ class AgentState(TypedDict, total=False):
     executor_thought: str
     browser_command: str
     validation_command: str
+    validation_commands: list[str]
     success_criteria: str
     observations: list[BrowserObservation]
     final: str

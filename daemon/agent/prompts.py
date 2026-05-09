@@ -133,6 +133,10 @@ def _observations_text(state: AgentState) -> str:
     for idx, observation in enumerate(observations[-6:], start=1):
         status = "ok" if observation.get("ok") else "failed"
         lines.append(f"{idx}. command: {observation.get('command', '')}")
+        if observation.get("skipped"):
+            lines.append("   skipped: yes")
+        if observation.get("side_effect"):
+            lines.append("   side effect: yes")
         lines.append(f"   status: {status}")
         if observation.get("success_criteria"):
             lines.append(f"   success criteria: {observation['success_criteria']}")
@@ -240,6 +244,7 @@ Return strict JSON only:
   "status": "continue" | "done" | "blocked",
   "command": "single agent-browser command without the agent-browser prefix; may be an empty string to print command help",
   "validation_command": "read-only agent-browser command to verify what changed; empty lets Wolfie choose a default",
+  "validation_commands": ["optional read-only validation commands when one check is not enough"],
   "success_criteria": "what output or page state would show this command worked",
   "result_summary": "short summary when status is done or blocked"
 }}
@@ -261,4 +266,9 @@ Validation rules:
   `get value <selector>`, `get text <selector>`, or `eval <js>`.
 - Do not return "done" just because an action command said "Done". Return
   "done" only after recent validation output proves the assigned task is done.
+- For send/submit/post/purchase/delete/message actions, do not repeat the
+  side-effect action if it may already have succeeded. Use multiple read-only
+  validation commands or ask the user.
+- If an observation says a side-effect command was skipped as a duplicate,
+  decide from validation evidence; do not try the same send/submit action again.
 """

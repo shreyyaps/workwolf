@@ -18,6 +18,45 @@ _OBSERVATION_COMMANDS = (
     "console",
     "errors",
 )
+_SIDE_EFFECT_WORDS = (
+    "send",
+    "sent",
+    "submit",
+    "submitted",
+    "post",
+    "posted",
+    "publish",
+    "published",
+    "purchase",
+    "purchased",
+    "pay",
+    "paid",
+    "order",
+    "ordered",
+    "book",
+    "booked",
+    "delete",
+    "deleted",
+    "remove",
+    "removed",
+    "confirm",
+    "confirmed",
+    "invite",
+    "invited",
+)
+_STATE_CHANGING_COMMANDS = (
+    "click ",
+    "dblclick ",
+    "press ",
+    "keyboard ",
+    "fill ",
+    "type ",
+    "check ",
+    "uncheck ",
+    "select ",
+    "drag ",
+    "upload ",
+)
 
 
 def _require_langgraph() -> tuple[Any, Any, Any]:
@@ -37,15 +76,112 @@ def _default_validation_command(command: str) -> str:
         return ""
     if normalized.startswith(_OBSERVATION_COMMANDS):
         return ""
-    if normalized.startswith("open ") or normalized in {"back", "forward", "reload"}:
-        return "snapshot -i -c"
-    if normalized.startswith(("click ", "dblclick ", "press ", "keyboard ")):
-        return "snapshot -i -c"
-    if normalized.startswith(("fill ", "type ", "check ", "uncheck ", "select ")):
-        return "snapshot -i -c"
-    if normalized.startswith(("scroll", "wait ", "hover ", "focus ", "tab ")):
-        return "snapshot -i -c"
     return "snapshot -i -c"
+
+
+def _is_state_changing_command(command: str) -> bool:
+    normalized = command.strip().lower()
+    return normalized.startswith(_STATE_CHANGING_COMMANDS) or normalized in {
+        "back",
+        "forward",
+        "reload",
+    } or normalized.startswith(("open ", "tab ", "scroll"))
+
+
+def _looks_like_side_effect(state: AgentState, command: str, criteria: str) -> bool:
+    if not _is_state_changing_command(command):
+        return False
+    normalized = command.strip().lower()
+    direct_context = f"{command} {criteria}".lower()
+    if any(word in direct_context for word in _SIDE_EFFECT_WORDS):
+        return True
+
+    if normalized.startswith(("click ", "press ", "keyboard ")):
+        task_context = f"{state.get('user_prompt', '')} {state.get('next_task', '')}".lower()
+        return any(word in task_context for word in _SIDE_EFFECT_WORDS)
+
+    return False
+
+
+def _already_attempted_side_effect(state: AgentState) -> bool:
+    return any(
+        bool(observation.get("side_effect")) and bool(observation.get("ok"))
+        for observation in state.get("observations", [])
+    )
+
+
+def _validation_commands_from_selected(selected: dict[str, Any]) -> list[str]:
+    raw_commands = selected.get("validation_commands")
+    if isinstance(raw_commands, list):
+        return [str(item).strip() for item in raw_commands if str(item).strip()]
+
+    command = str(selected.get("validation_command", "")).strip()
+    return [command] if command else []
+
+
+def _default_validation_commands(
+    state: AgentState,
+    command: str,
+    criteria: str,
+    side_effect: bool,
+) -> list[str]:
+    default = _default_validation_command(command)
+    if not default:
+        return []
+
+    if side_effect:
+        context = " ".join(
+            [
+                str(state.get("user_prompt", "")),
+                str(state.get("next_task", "")),
+                criteria,
+            ]
+        ).lower()
+        commands = ["wait 1200"]
+        if any(word in context for word in ("gmail", "email", "mail", "message")):
+            commands.append(
+                "eval \"(() => { const text = document.body.innerText; "
+                "const matches = text.match(/Message sent|Undo|View message|"
+                "Sending|Draft saved|New Message/gi); "
+                "return matches ? matches.join(' | ') : text.slice(-2000); })()\""
+            )
+        commands.extend(
+            [
+                "snapshot -i -c",
+                "snapshot -i -c -d 5",
+                "screenshot --annotate /tmp/wolfie-validation.png",
+            ]
+        )
+        return commands
+
+    return [default]
+
+
+async def _run_validation_commands(commands: list[str]) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for command in commands:
+        result = await asyncio.to_thread(agent_browser, command)
+        results.append(
+            {
+                "command": command,
+                "ok": result.get("status") == "success",
+                "output": result.get("data")
+                or result.get("message")
+                or result.get("logs")
+                or "",
+                "error": str(result.get("error") or result.get("reason") or ""),
+            }
+        )
+    return results
+
+
+def _validation_output(results: list[dict[str, Any]]) -> str:
+    chunks: list[str] = []
+    for result in results:
+        status = "ok" if result.get("ok") else "failed"
+        output = result.get("output") or result.get("error") or ""
+        chunks.append(f"$ agent-browser {result.get('command', '')}\n[{status}]\n{output}")
+    return "\n\n".join(chunks)
 
 
 async def _planner_node(state: AgentState) -> AgentState:
@@ -97,7 +233,7 @@ async def _executor_node(state: AgentState) -> AgentState:
     has_command = "command" in selected
     command = str(selected.get("command", "")).strip()
     success_criteria = str(selected.get("success_criteria", "")).strip()
-    validation_command = str(selected.get("validation_command", "")).strip()
+    validation_commands = _validation_commands_from_selected(selected)
     thought = str(selected.get("thought", "")).strip()
     result_summary = str(selected.get("result_summary", "")).strip()
 
@@ -108,7 +244,50 @@ async def _executor_node(state: AgentState) -> AgentState:
             "executor_thought": thought,
             "browser_command": "",
             "validation_command": "",
+            "validation_commands": [],
             "success_criteria": success_criteria,
+        }
+
+    side_effect = _looks_like_side_effect(state, command, success_criteria)
+    duplicate_side_effect = side_effect and _already_attempted_side_effect(state)
+    if duplicate_side_effect:
+        if not validation_commands:
+            validation_commands = _default_validation_commands(
+                state,
+                command,
+                success_criteria,
+                side_effect=True,
+            )
+        validation_results = await _run_validation_commands(validation_commands)
+        validation_output = _validation_output(validation_results)
+        observation: BrowserObservation = {
+            "command": command,
+            "skipped": True,
+            "side_effect": True,
+            "ok": False,
+            "output": "",
+            "error": (
+                "Skipped a likely duplicate side-effect action. "
+                "Validate with read-only commands or ask the user before retrying."
+            ),
+            "success_criteria": success_criteria,
+            "validation_command": " && ".join(validation_commands),
+            "validation_commands": validation_commands,
+            "validation_ok": all(result.get("ok") for result in validation_results),
+            "validation_output": validation_output,
+            "validation_error": "",
+            "validation_results": validation_results,
+        }
+        return {
+            "executor_status": "continue",
+            "executor_reason": "Skipped likely duplicate side-effect action.",
+            "executor_thought": thought,
+            "browser_command": command,
+            "validation_command": " && ".join(validation_commands),
+            "validation_commands": validation_commands,
+            "success_criteria": success_criteria,
+            "observations": [*state.get("observations", []), observation],
+            "step_count": state.get("step_count", 0) + 1,
         }
 
     result = await asyncio.to_thread(agent_browser, command)
@@ -116,35 +295,35 @@ async def _executor_node(state: AgentState) -> AgentState:
     output = result.get("data") or result.get("message") or result.get("logs") or ""
     error = result.get("error") or result.get("reason") or ""
 
-    if ok and not validation_command:
-        validation_command = _default_validation_command(command)
-
-    validation_ok = False
-    validation_output = ""
-    validation_error = ""
-    if ok and validation_command:
-        validation_result = await asyncio.to_thread(agent_browser, validation_command)
-        validation_ok = validation_result.get("status") == "success"
-        validation_output = (
-            validation_result.get("data")
-            or validation_result.get("message")
-            or validation_result.get("logs")
-            or ""
-        )
-        validation_error = str(
-            validation_result.get("error") or validation_result.get("reason") or ""
+    if ok and not validation_commands:
+        validation_commands = _default_validation_commands(
+            state,
+            command,
+            success_criteria,
+            side_effect,
         )
 
+    validation_results = (
+        await _run_validation_commands(validation_commands)
+        if ok and validation_commands
+        else []
+    )
+    validation_output = _validation_output(validation_results)
     observation: BrowserObservation = {
         "command": command,
+        "side_effect": side_effect,
         "ok": bool(ok),
         "output": output,
         "error": str(error),
         "success_criteria": success_criteria,
-        "validation_command": validation_command,
-        "validation_ok": validation_ok,
+        "validation_command": " && ".join(validation_commands),
+        "validation_commands": validation_commands,
+        "validation_ok": all(result.get("ok") for result in validation_results)
+        if validation_results
+        else False,
         "validation_output": validation_output,
-        "validation_error": validation_error,
+        "validation_error": "",
+        "validation_results": validation_results,
     }
 
     return {
@@ -152,7 +331,8 @@ async def _executor_node(state: AgentState) -> AgentState:
         "executor_reason": result_summary,
         "executor_thought": thought,
         "browser_command": command,
-        "validation_command": validation_command,
+        "validation_command": " && ".join(validation_commands),
+        "validation_commands": validation_commands,
         "success_criteria": success_criteria,
         "observations": [*state.get("observations", []), observation],
         "step_count": state.get("step_count", 0) + 1,

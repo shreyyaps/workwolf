@@ -315,6 +315,10 @@ def _format_agent_event(data: Mapping[str, object]) -> None:
         output = str(data.get("output") or "")
         if not output:
             output = "No output"
+        if data.get("skipped"):
+            output = f"Skipped duplicate side-effect action.\n{output}"
+        if data.get("side_effect"):
+            output = f"{output}\nside effect: yes"
         criteria = data.get("success_criteria")
         if criteria:
             output = f"{output}\ncriteria: {criteria}"

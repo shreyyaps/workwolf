@@ -75,14 +75,14 @@ def _events_from_update(update: dict[str, Any]) -> list[dict[str, Any]]:
             return emitted
 
         emitted.append(
-                event(
-                    "action",
-                    tool="agent-browser",
-                    command=command,
-                    validation_command=executor.get("validation_command", ""),
-                    thought=executor.get("executor_thought", ""),
-                )
+            event(
+                "action",
+                tool="agent-browser",
+                command=command,
+                validation_command=executor.get("validation_command", ""),
+                thought=executor.get("executor_thought", ""),
             )
+        )
         observations = executor.get("observations") or []
         if observations:
             latest = observations[-1]
@@ -90,6 +90,8 @@ def _events_from_update(update: dict[str, Any]) -> list[dict[str, Any]]:
                 event(
                     "observation",
                     command=latest.get("command", ""),
+                    skipped=bool(latest.get("skipped")),
+                    side_effect=bool(latest.get("side_effect")),
                     ok=bool(latest.get("ok")),
                     output=_clean_text(latest.get("output") or latest.get("error")),
                     success_criteria=latest.get("success_criteria", ""),
