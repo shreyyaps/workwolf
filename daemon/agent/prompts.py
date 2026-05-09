@@ -22,15 +22,10 @@ SYSTEM_PROMPT = """You are Wolfie, a local browser automation agent.
 You operate a real headed Chrome window through Chrome DevTools Protocol at
 127.0.0.1:9222. The browser uses the user's persistent profile at ./user-data.
 That profile can contain logged-in sessions, cookies, extensions, browsing
-history, and private user data. Treat it as the user's personal browser.
+history, and private user data. Treat it as your own identity on the internet.
+you can do auth and logins..always try googl auth if its avaliable..or usthid phone no "8953267937" if not given
 
-Privacy and safety rules:
-- Prefer existing signed-in sessions. Do not ask for passwords unless the user
-  explicitly asks you to handle a login flow.
-- Never delete profile data, cookies, sessions, history, or saved state.
-- Do not reveal secrets, cookies, tokens, or unrelated private page contents.
-- If a task might submit purchases, messages, destructive changes, or sensitive
-  data, stop and ask the user for confirmation.
+
 
 Agent structure:
 - The planner owns the global goal, plan, stopping condition, and high-level
@@ -146,7 +141,35 @@ def _observations_text(state: AgentState) -> str:
             "   output: "
             + _excerpt_output(str(observation.get("command", "")), output)
         )
+        validation_command = observation.get("validation_command", "")
+        if validation_command:
+            validation_status = "ok" if observation.get("validation_ok") else "failed"
+            validation_output = (
+                observation.get("validation_output")
+                or observation.get("validation_error")
+                or ""
+            )
+            lines.append(f"   validation command: {validation_command}")
+            lines.append(f"   validation status: {validation_status}")
+            lines.append(
+                "   validation output: "
+                + _excerpt_output(str(validation_command), validation_output)
+            )
     return "\n".join(lines)
+
+
+def _conversation_text(state: AgentState) -> str:
+    conversation = state.get("conversation", [])
+    if not conversation:
+        return "No conversation messages yet."
+
+    lines: list[str] = []
+    for message in conversation[-8:]:
+        role = message.get("role", "user")
+        content = str(message.get("content", "")).strip()
+        if content:
+            lines.append(f"{role}: {content}")
+    return "\n".join(lines) or "No conversation messages yet."
 
 
 def planner_prompt(state: AgentState) -> str:
@@ -163,6 +186,12 @@ Step count: {state.get('step_count', 0)} / {state.get('max_steps', 20)}
 Current plan:
 {state.get('plan') or 'No plan yet.'}
 
+Conversation memory:
+{_conversation_text(state)}
+
+Latest user input:
+{state.get('user_feedback') or 'None'}
+
 Recent observations:
 {_observations_text(state)}
 
@@ -172,7 +201,9 @@ Return strict JSON only:
   "plan": ["short ordered step", "..."],
   "next_task": "one outcome-based task for the executor, empty unless status is continue",
   "reason": "why this is the right next step or why stopping",
-  "final": "user-facing final answer when done/failed/need_user"
+  "final": "user-facing final answer when done/failed/need_user",
+  "question": "question to ask the user when status is need_user, otherwise empty",
+  "choices": ["optional short choices when status is need_user"]
 }}
 
 Give the executor a result to achieve, not a command sequence. Good:
@@ -181,6 +212,11 @@ fill @e1, click @e2." The executor owns command selection and retries.
 
 If the latest observation is not what you expected, correct course by changing
 the next task. Do not keep repeating the same failed command.
+
+Only use status "need_user" when the user must choose, approve, clarify, or
+provide information before the task can continue. Ask one concrete question.
+When Latest user input is not None, treat it as the user's answer or guidance
+for the current task and continue from the stored state.
 """
 
 
@@ -203,6 +239,7 @@ Return strict JSON only:
   "thought": "brief reason for the selected browser command",
   "status": "continue" | "done" | "blocked",
   "command": "single agent-browser command without the agent-browser prefix; may be an empty string to print command help",
+  "validation_command": "read-only agent-browser command to verify what changed; empty lets Wolfie choose a default",
   "success_criteria": "what output or page state would show this command worked",
   "result_summary": "short summary when status is done or blocked"
 }}
@@ -216,4 +253,12 @@ needs planner correction or user input after reasonable alternatives.
 If a command fails or output is incomplete, try a different tactic yourself:
 compact/scoped snapshot, annotated screenshot, find with the correct syntax,
 or eval. Do not return "blocked" after a single failed command.
+
+Validation rules:
+- Every state-changing command must be followed by evidence of the new page state.
+- Prefer a precise read-only validation_command: `get url`, `snapshot -i -c`,
+  `snapshot -i -c -s "[role='dialog']"`, `is visible <selector>`,
+  `get value <selector>`, `get text <selector>`, or `eval <js>`.
+- Do not return "done" just because an action command said "Done". Return
+  "done" only after recent validation output proves the assigned task is done.
 """

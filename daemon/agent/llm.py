@@ -54,7 +54,7 @@ class GeminiClient:
             self._client = genai.Client(api_key=request_api_key)
         else:
             self._client = genai.Client()
-        self.model = os.getenv("WOLFIE_GEMINI_MODEL", "gemini-3-pro-preview")
+        self.model = os.getenv("WOLFIE_GEMINI_MODEL", "gemini-3.1-flash-lite")
         self.thinking_level = os.getenv("WOLFIE_GEMINI_THINKING_LEVEL", "HIGH")
 
     def _generate_text_sync(self, prompt: str) -> str:

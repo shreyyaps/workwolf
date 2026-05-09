@@ -1,12 +1,21 @@
 from typing import Any, TypedDict
 
 
+class ConversationMessage(TypedDict, total=False):
+    role: str
+    content: str
+
+
 class BrowserObservation(TypedDict, total=False):
     command: str
     ok: bool
     output: Any
     error: str
     success_criteria: str
+    validation_command: str
+    validation_ok: bool
+    validation_output: Any
+    validation_error: str
 
 
 class AgentState(TypedDict, total=False):
@@ -17,14 +26,20 @@ class AgentState(TypedDict, total=False):
     profile_dir: str
     cdp_host: str
     cdp_port: int
+    conversation: list[ConversationMessage]
+    user_feedback: str
+    task_status: str
     plan: list[str]
     planner_status: str
     planner_reason: str
     next_task: str
+    pending_question: str
+    pending_choices: list[str]
     executor_status: str
     executor_reason: str
     executor_thought: str
     browser_command: str
+    validation_command: str
     success_criteria: str
     observations: list[BrowserObservation]
     final: str
@@ -47,6 +62,11 @@ def initial_state(
         "profile_dir": profile_dir,
         "cdp_host": cdp_host,
         "cdp_port": cdp_port,
+        "conversation": [{"role": "user", "content": prompt}],
+        "user_feedback": "",
+        "task_status": "running",
         "plan": [],
+        "pending_question": "",
+        "pending_choices": [],
         "observations": [],
     }

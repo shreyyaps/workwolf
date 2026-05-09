@@ -12,7 +12,9 @@ from rich.text import Text
 
 from ..core.config import (
     DAEMON_AGENT_BROWSER_COMMAND_URL,
+    DAEMON_AGENT_INPUT_URL,
     DAEMON_AGENT_PROMPT_URL,
+    DAEMON_AGENT_STATE_URL,
     console,
 )
 from ..ui.theme import BG, DIM
@@ -297,6 +299,10 @@ def _format_agent_event(data: Mapping[str, object]) -> None:
         return
     if event_type == "action":
         body = Text(str(data.get("command") or ""), style=f"bold cyan {BG}")
+        validation_command = data.get("validation_command")
+        if validation_command:
+            body.append("\nvalidate: ", style=DIM)
+            body.append(str(validation_command), style=f"cyan {BG}")
         thought = data.get("thought")
         if thought:
             body.append("\n")
@@ -312,6 +318,14 @@ def _format_agent_event(data: Mapping[str, object]) -> None:
         criteria = data.get("success_criteria")
         if criteria:
             output = f"{output}\ncriteria: {criteria}"
+        validation_command = data.get("validation_command")
+        validation_output = str(data.get("validation_output") or "")
+        if validation_command:
+            validation_status = "ok" if data.get("validation_ok") else "failed"
+            output = (
+                f"{output}\nvalidation ({validation_status}): "
+                f"{validation_command}\n{validation_output or 'No validation output'}"
+            )
         _print_status("observation", Text(output, style=f"{style} {BG}"), style)
         return
     if event_type == "executor":
@@ -322,6 +336,16 @@ def _format_agent_event(data: Mapping[str, object]) -> None:
         if thought:
             message = f"{message}\n{thought}"
         _print_status("executor", Text(message, style=f"{style} {BG}"), style)
+        return
+    if event_type == "need_user":
+        question = str(data.get("question") or "Agent needs input.")
+        choices = data.get("choices") if isinstance(data.get("choices"), list) else []
+        body = Text(question, style=f"bold yellow {BG}")
+        for idx, choice in enumerate(choices, start=1):
+            body.append(f"\n{idx}. {choice}", style=DIM)
+        body.append("\nreply: ", style=DIM)
+        body.append("input <answer>", style=f"bold cyan {BG}")
+        _print_status("need input", body, "yellow")
         return
     if event_type == "final":
         _print_status("final", Text(str(data.get("text") or ""), style=f"bold green {BG}"), "green")
@@ -339,23 +363,26 @@ def _format_agent_event(data: Mapping[str, object]) -> None:
     _print_status("event", Text(str(dict(data)), style=f"white {BG}"), "cyan")
 
 
-async def _post_agent_prompt(prompt: str) -> None:
+def _agent_headers() -> dict[str, str]:
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     headers = {}
     if api_key:
         headers["X-Wolfie-Gemini-Api-Key"] = api_key
+    return headers
 
+
+async def _stream_agent_request(url: str, payload: dict[str, object], label: str) -> None:
     async with httpx.AsyncClient(timeout=None) as client:
         try:
             with console.status(
-                f"[cyan on grey11]Planning[/] [bold white on grey11]{escape(prompt)}[/]",
+                f"[cyan on grey11]{escape(label)}[/]",
                 spinner="dots",
             ):
                 async with client.stream(
                     "POST",
-                    DAEMON_AGENT_PROMPT_URL,
-                    headers=headers,
-                    json={"prompt": prompt, "thread_id": "default"},
+                    url,
+                    headers=_agent_headers(),
+                    json=payload,
                 ) as response:
                     if response.status_code >= 400:
                         text = await response.aread()
@@ -376,6 +403,88 @@ async def _post_agent_prompt(prompt: str) -> None:
             _print_status("Error", Text(str(e), style=f"bold red {BG}"), "red")
 
 
+async def _post_agent_prompt(prompt: str) -> None:
+    await _stream_agent_request(
+        DAEMON_AGENT_PROMPT_URL,
+        {"prompt": prompt, "thread_id": "default"},
+        f"Planning {prompt}",
+    )
+
+
+async def _post_agent_input(message: str) -> None:
+    await _stream_agent_request(
+        DAEMON_AGENT_INPUT_URL,
+        {"message": message, "thread_id": "default"},
+        f"Sending input {message}",
+    )
+
+
+def _format_agent_state(data: Mapping[str, object]) -> None:
+    if data.get("status") == "missing":
+        _print_status(
+            "state",
+            Text(str(data.get("message") or "No agent session."), style=f"yellow {BG}"),
+            "yellow",
+        )
+        return
+
+    body = Text()
+    body.append(str(data.get("task_status") or "unknown"), style=f"bold cyan {BG}")
+    goal = data.get("goal")
+    if goal:
+        body.append("\ngoal: ", style=DIM)
+        body.append(str(goal), style=f"white {BG}")
+    body.append(
+        f"\nsteps: {data.get('step_count', 0)} / {data.get('max_steps', 0)}",
+        style=DIM,
+    )
+    next_task = data.get("next_task")
+    if next_task:
+        body.append("\nnext: ", style=DIM)
+        body.append(str(next_task), style=f"white {BG}")
+    pending_question = data.get("pending_question")
+    if pending_question:
+        body.append("\nquestion: ", style=DIM)
+        body.append(str(pending_question), style=f"bold yellow {BG}")
+
+    _print_status("agent state", body, "cyan")
+
+    plan = data.get("plan") if isinstance(data.get("plan"), list) else []
+    if plan:
+        table = Table.grid(padding=(0, 1))
+        table.style = BG
+        table.add_column(style=DIM, no_wrap=True)
+        table.add_column(style=f"white {BG}")
+        for idx, item in enumerate(plan, start=1):
+            table.add_row(str(idx), str(item))
+        console.print()
+        console.print(f"[{DIM}]plan[/]")
+        console.print(table)
+
+    latest = data.get("last_observation")
+    if isinstance(latest, Mapping):
+        output = str(latest.get("output") or latest.get("error") or "")
+        if output:
+            _print_status(
+                "last observation",
+                Text(output[:2000], style=f"green {BG}"),
+                "green",
+            )
+
+
+async def _get_agent_state() -> None:
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        try:
+            response = await client.get(DAEMON_AGENT_STATE_URL)
+            _format_agent_state(json.loads(response.text))
+        except httpx.RequestError as e:
+            body = Text(f"Could not reach the daemon: {e}", style=f"bold red {BG}")
+            body.append("\nRun wolfie again to restart the local daemon.", style=DIM)
+            _print_status("Connection Error", body, "red")
+        except Exception as e:
+            _print_status("Error", Text(str(e), style=f"bold red {BG}"), "red")
+
+
 async def _run(command: str) -> None:
     if command.lower() == "start" and await _needs_login():
         _print_signin_notice()
@@ -388,6 +497,22 @@ async def _run(command: str) -> None:
         return
     if command.startswith("prompt "):
         await _post_agent_prompt(command[len("prompt ") :].strip())
+        return
+    if command == "input":
+        _print_status(
+            "error",
+            Text("Usage: input <answer>", style=f"bold red {BG}"),
+            "red",
+        )
+        return
+    if command.startswith("input "):
+        await _post_agent_input(command[len("input ") :].strip())
+        return
+    if command.startswith("reply "):
+        await _post_agent_input(command[len("reply ") :].strip())
+        return
+    if command == "state":
+        await _get_agent_state()
         return
     await _post_command(command)
 
