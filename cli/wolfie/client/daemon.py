@@ -369,9 +369,15 @@ def _format_agent_event(data: Mapping[str, object]) -> None:
 
 def _agent_headers() -> dict[str, str]:
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    model = os.getenv("WOLFIE_GEMINI_MODEL")
+    thinking_level = os.getenv("WOLFIE_GEMINI_THINKING_LEVEL")
     headers = {}
     if api_key:
         headers["X-Wolfie-Gemini-Api-Key"] = api_key
+    if model:
+        headers["X-Wolfie-Gemini-Model"] = model
+    if thinking_level:
+        headers["X-Wolfie-Gemini-Thinking-Level"] = thinking_level
     return headers
 
 

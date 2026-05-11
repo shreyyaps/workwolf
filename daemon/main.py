@@ -12,9 +12,12 @@ for _path in (_root_dir, _daemon_dir):
         sys.path.insert(0, str(_path))
 
 from middlewares.request_context import register_middlewares
+from agent.env import load_env_local
 from router.agent import router as agent_router
 from router.agent_browser_command import router as agent_browser_command_router
 from router.api import router as api_router
+
+load_env_local()
 
 app = FastAPI()
 

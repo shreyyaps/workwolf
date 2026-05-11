@@ -24,6 +24,16 @@ async def run_agent_prompt_route(
         alias="X-Wolfie-Gemini-Api-Key",
         include_in_schema=False,
     ),
+    gemini_model: str | None = Header(
+        default=None,
+        alias="X-Wolfie-Gemini-Model",
+        include_in_schema=False,
+    ),
+    gemini_thinking_level: str | None = Header(
+        default=None,
+        alias="X-Wolfie-Gemini-Thinking-Level",
+        include_in_schema=False,
+    ),
 ):
     prompt = payload.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
@@ -38,7 +48,14 @@ async def run_agent_prompt_route(
         raise HTTPException(status_code=400, detail="max_steps must be an integer")
 
     async def stream():
-        async for event in run_agent_prompt(prompt, thread_id, max_steps, gemini_api_key):
+        async for event in run_agent_prompt(
+            prompt,
+            thread_id,
+            max_steps,
+            gemini_api_key,
+            gemini_model,
+            gemini_thinking_level,
+        ):
             yield encode_event(event)
 
     return StreamingResponse(stream(), media_type="application/x-ndjson")
@@ -50,6 +67,16 @@ async def run_agent_input_route(
     gemini_api_key: str | None = Header(
         default=None,
         alias="X-Wolfie-Gemini-Api-Key",
+        include_in_schema=False,
+    ),
+    gemini_model: str | None = Header(
+        default=None,
+        alias="X-Wolfie-Gemini-Model",
+        include_in_schema=False,
+    ),
+    gemini_thinking_level: str | None = Header(
+        default=None,
+        alias="X-Wolfie-Gemini-Thinking-Level",
         include_in_schema=False,
     ),
 ):
@@ -66,7 +93,14 @@ async def run_agent_input_route(
         raise HTTPException(status_code=400, detail="max_steps must be an integer")
 
     async def stream():
-        async for event in run_agent_input(message, thread_id, max_steps, gemini_api_key):
+        async for event in run_agent_input(
+            message,
+            thread_id,
+            max_steps,
+            gemini_api_key,
+            gemini_model,
+            gemini_thinking_level,
+        ):
             yield encode_event(event)
 
     return StreamingResponse(stream(), media_type="application/x-ndjson")

@@ -133,7 +133,7 @@ Before invoking the graph, `daemon/agent/service.py` preflights
 to run `start` first.
 
 Gemini is accessed through `google-genai`; the default model is
-`gemini-3-pro-preview` and can be overridden with `WOLFIE_GEMINI_MODEL`.
+`gemini-flash-latest` and can be overridden with `WOLFIE_GEMINI_MODEL`.
 The default thinking level is `HIGH` and can be overridden with
 `WOLFIE_GEMINI_THINKING_LEVEL`. The model selection code lives in
 `daemon/agent/llm.py`.

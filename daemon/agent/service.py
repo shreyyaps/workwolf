@@ -8,7 +8,15 @@ from llm_orchestration_langgraph.functions.agent_browser_vercel import USER_DATA
 
 from .events import event
 from .graph import build_graph
-from .llm import AgentDependencyError, reset_request_api_key, set_request_api_key
+from .llm import (
+    AgentDependencyError,
+    reset_request_api_key,
+    reset_request_model,
+    reset_request_thinking_level,
+    set_request_api_key,
+    set_request_model,
+    set_request_thinking_level,
+)
 from .sessions import (
     apply_user_input,
     get_session_state,
@@ -140,9 +148,13 @@ async def _preflight_browser() -> AsyncIterator[dict[str, Any]]:
 async def _run_agent_state(
     state: AgentState,
     api_key: str | None,
+    model: str | None,
+    thinking_level: str | None,
 ) -> AsyncIterator[dict[str, Any]]:
     thread = str(state.get("thread_id") or f"wolfie-{uuid.uuid4().hex[:8]}")
-    token = set_request_api_key(api_key)
+    api_key_token = set_request_api_key(api_key)
+    model_token = set_request_model(model)
+    thinking_level_token = set_request_thinking_level(thinking_level)
     try:
         for payload in [
             event("status", message="starting LangGraph browser agent", thread_id=thread)
@@ -185,7 +197,9 @@ async def _run_agent_state(
         except Exception as exc:
             yield event("error", message=str(exc), thread_id=thread)
     finally:
-        reset_request_api_key(token)
+        reset_request_thinking_level(thinking_level_token)
+        reset_request_model(model_token)
+        reset_request_api_key(api_key_token)
 
 
 async def run_agent_prompt(
@@ -193,6 +207,8 @@ async def run_agent_prompt(
     thread_id: str | None = None,
     max_steps: int = 40,
     api_key: str | None = None,
+    model: str | None = None,
+    thinking_level: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     if not prompt.strip():
         yield event("error", message="prompt is required")
@@ -202,8 +218,8 @@ async def run_agent_prompt(
         yield event(
             "error",
             message=(
-                "No Gemini API key found. Export GEMINI_API_KEY before running "
-                "`wolfie`, or restart the daemon after setting it."
+                "No Gemini API key found. Set GEMINI_API_KEY in `.env.local`, "
+                "or export it before running `wolfie`."
             ),
         )
         return
@@ -215,7 +231,7 @@ async def run_agent_prompt(
         max_steps=max(1, min(max_steps, 50)),
         profile_dir=str(USER_DATA_DIR),
     )
-    async for payload in _run_agent_state(state, api_key):
+    async for payload in _run_agent_state(state, api_key, model, thinking_level):
         yield payload
 
 
@@ -224,6 +240,8 @@ async def run_agent_input(
     thread_id: str | None = None,
     max_steps: int = 40,
     api_key: str | None = None,
+    model: str | None = None,
+    thinking_level: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     if not message.strip():
         yield event("error", message="input message is required")
@@ -233,8 +251,8 @@ async def run_agent_input(
         yield event(
             "error",
             message=(
-                "No Gemini API key found. Export GEMINI_API_KEY before running "
-                "`wolfie`, or restart the daemon after setting it."
+                "No Gemini API key found. Set GEMINI_API_KEY in `.env.local`, "
+                "or export it before running `wolfie`."
             ),
         )
         return
@@ -251,7 +269,7 @@ async def run_agent_input(
 
     state = apply_user_input(existing, message, max_steps)
     yield event("status", message="received user input; resuming agent", thread_id=thread)
-    async for payload in _run_agent_state(state, api_key):
+    async for payload in _run_agent_state(state, api_key, model, thinking_level):
         yield payload
 
 

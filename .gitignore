@@ -136,6 +136,8 @@ celerybeat.pid
 
 # Environments
 .env
+.env.local
+.env.*.local
 .envrc
 user-data/
 .venv
@@ -210,5 +212,4 @@ __marimo__/
 
 
 .wolfie_history
-
 
